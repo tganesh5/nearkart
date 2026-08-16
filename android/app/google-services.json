@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "861604428943",
+    "project_id": "nearkart007-app",
+    "storage_bucket": "nearkart007-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:861604428943:android:4cec87f284c047c2ef04fa",
+        "android_client_info": {
+          "package_name": "com.nearkart.nearkart"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB2NPoK0hBl6mAzGGMZgUdDHkRkRb2-Q4s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
