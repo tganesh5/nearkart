@@ -10,7 +10,7 @@ NearKart connects local vendors (kirana stores, bakeries, pharmacies, etc.) with
 - Browse nearby stores by location
 - Search stores and products
 - Add to cart with quantity management
-- Checkout with COD, UPI, or Card payment (Razorpay)
+- Checkout with UPI or cash on delivery
 - Real-time order tracking
 - Order history and reordering
 
@@ -26,7 +26,7 @@ NearKart connects local vendors (kirana stores, bakeries, pharmacies, etc.) with
 - Cloud Firestore for real-time data
 - Firebase Storage for images
 - Push notifications (FCM)
-- Razorpay payment gateway
+- UPI payments by deep link, paid straight to the store's UPI id
 - Delivery partner integration (Porter/Dunzo/Shadowfax)
 - Location-based store discovery
 - Offline-aware with connectivity detection
@@ -45,7 +45,7 @@ lib/
 ├── providers/        → Riverpod state management
 ├── services/
 │   ├── firebase/     → Auth, Firestore, Storage services
-│   ├── payment/      → Razorpay integration
+│   ├── payment/      → UPI deep links
 │   ├── location/     → GPS + Geocoding
 │   ├── notification/ → FCM + Local notifications
 │   └── delivery/     → Delivery partner API
@@ -58,7 +58,6 @@ lib/
 - Flutter 3.8+ (Dart 3.8+)
 - Firebase CLI (`npm install -g firebase-tools`)
 - A Firebase project
-- Razorpay account (for payments)
 - Android Studio / Xcode
 
 ## Setup
@@ -100,11 +99,23 @@ Run with environment flags:
 
 ```bash
 # Development
-flutter run --dart-define=ENV=dev --dart-define=RAZORPAY_KEY_DEV=rzp_test_xxxxx
+flutter run --dart-define=ENV=dev
 
 # Production
-flutter run --release --dart-define=ENV=prod --dart-define=RAZORPAY_KEY_PROD=rzp_live_xxxxx
+flutter run --release --dart-define=ENV=prod
 ```
+
+Google Sign-In uses the public Web OAuth client ID already in
+`android/app/google-services.json`. Override it only when pointing at a
+different Firebase project:
+
+```bash
+flutter run --dart-define=ENV=dev --dart-define=GOOGLE_SERVER_CLIENT_ID=...
+```
+
+Payments need no keys: UPI runs through the device's own UPI app, the store's
+UPI id lives on the store document, and the platform's payee id is set by an
+admin under **Platform settings**.
 
 ### 5. Android Setup
 
@@ -134,10 +145,10 @@ In `android/app/build.gradle`:
 flutter run
 
 # Release (Android)
-flutter build apk --release --dart-define=ENV=prod --dart-define=RAZORPAY_KEY_PROD=rzp_live_xxxxx
+flutter build apk --release --dart-define=ENV=prod
 
 # Release (iOS)
-flutter build ios --release --dart-define=ENV=prod --dart-define=RAZORPAY_KEY_PROD=rzp_live_xxxxx
+flutter build ios --release --dart-define=ENV=prod
 ```
 
 ## Testing
@@ -150,7 +161,7 @@ flutter test --coverage
 ## Deployment Checklist
 
 - [ ] Firebase project created and configured
-- [ ] Razorpay account activated with live keys
+- [ ] Platform payee UPI id set under admin **Platform settings**
 - [ ] Firestore security rules deployed
 - [ ] Storage rules deployed
 - [ ] FCM configured for push notifications
@@ -168,7 +179,7 @@ flutter test --coverage
 | Frontend | Flutter 3.8+ (Dart) |
 | State | Riverpod |
 | Backend | Firebase (Auth, Firestore, Storage, FCM) |
-| Payments | Razorpay |
+| Payments | UPI deep links (url_launcher) |
 | Location | Geolocator + Geocoding |
 | Delivery | Porter / Dunzo / Shadowfax API |
 | Analytics | Firebase Analytics |

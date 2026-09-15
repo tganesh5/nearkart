@@ -1,11 +1,19 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/constants/app_constants.dart';
 import '../../providers/cart_provider.dart';
+import '../../core/exceptions/app_exception.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/platform_settings_provider.dart';
+import '../../services/location/location_service.dart';
+import '../common/location_picker_screen.dart';
 import '../../services/payment/payment_service.dart';
+import 'address_choice_sheet.dart';
 
 class CheckoutScreen extends ConsumerStatefulWidget {
   const CheckoutScreen({super.key});
@@ -17,11 +25,11 @@ class CheckoutScreen extends ConsumerStatefulWidget {
 class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
   String _deliveryType = 'delivery';
   String _paymentMethod = 'upi';
-  final _addressController = TextEditingController(
-    text: '42, 3rd Cross, Koramangala 5th Block, Bangalore - 560034',
-  );
+  final _addressController = TextEditingController();
   final _notesController = TextEditingController();
   bool _isProcessing = false;
+  double? _deliveryLatitude;
+  double? _deliveryLongitude;
 
   final _paymentService = PaymentService();
 
@@ -38,11 +46,15 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
     final deliveryFee = _deliveryType == 'pickup'
         ? 0.0
         : (cartState.subtotal >= AppConstants.freeDeliveryAbove
-            ? 0.0
-            : AppConstants.deliveryFee);
+              ? 0.0
+              : AppConstants.deliveryFee);
 
     final orderAmount = cartState.subtotal + deliveryFee;
-    final platformFee = orderAmount * (AppConstants.platformFeePercent / 100);
+    // The fee rule is set by an admin in Platform & fees; the constant is only
+    // a fallback for the first load before settings arrive.
+    final platformSettings =
+        ref.watch(platformSettingsProvider).value ?? const PlatformSettings();
+    final platformFee = platformSettings.feeFor(orderAmount);
     final totalCustomerPays = orderAmount + platformFee;
 
     return Scaffold(
@@ -85,6 +97,15 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                 style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
               ),
               const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _isProcessing ? null : _chooseSavedAddress,
+                icon: const Icon(Icons.bookmark_border),
+                label: const Text('Saved & recent addresses'),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(double.infinity, 44),
+                ),
+              ),
+              const SizedBox(height: 12),
               TextField(
                 controller: _addressController,
                 maxLines: 3,
@@ -96,6 +117,50 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                   ),
                 ),
               ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _isProcessing ? null : _chooseOnMap,
+                      icon: const Icon(Icons.map_outlined),
+                      label: const Text('Choose on map'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _isProcessing ? null : _useCurrentLocation,
+                      icon: const Icon(Icons.my_location),
+                      label: const Text('Use my location'),
+                    ),
+                  ),
+                ],
+              ),
+              if (_deliveryLatitude != null && _deliveryLongitude != null) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.check_circle,
+                      size: 16,
+                      color: AppColors.success,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Pin set at '
+                        '${_deliveryLatitude!.toStringAsFixed(5)}, '
+                        '${_deliveryLongitude!.toStringAsFixed(5)}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
             const SizedBox(height: 24),
             const Text(
@@ -147,14 +212,20 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                   const SizedBox(height: 8),
                   _BillRow(
                     label: 'Delivery Fee',
-                    value: deliveryFee == 0 ? 'FREE' : '₹${deliveryFee.toStringAsFixed(2)}',
+                    value: deliveryFee == 0
+                        ? 'FREE'
+                        : '₹${deliveryFee.toStringAsFixed(2)}',
                     valueColor: deliveryFee == 0 ? AppColors.success : null,
                   ),
-                  const SizedBox(height: 8),
-                  _BillRow(
-                    label: 'Convenience Fee (${AppConstants.platformFeePercent}%)',
-                    value: '₹${platformFee.toStringAsFixed(2)}',
-                  ),
+                  if (platformFee > 0) ...[
+                    const SizedBox(height: 8),
+                    _BillRow(
+                      label:
+                          'Convenience Fee '
+                          '(${platformSettings.feePercent}%)',
+                      value: '₹${platformFee.toStringAsFixed(2)}',
+                    ),
+                  ],
                   const Divider(height: 20),
                   _BillRow(
                     label: 'Total',
@@ -168,7 +239,10 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4),
               child: Text(
-                '₹${orderAmount.toStringAsFixed(2)} goes to vendor • ₹${platformFee.toStringAsFixed(2)} platform fee',
+                platformFee > 0
+                    ? '₹${orderAmount.toStringAsFixed(2)} goes to vendor • '
+                          '₹${platformFee.toStringAsFixed(2)} platform fee'
+                    : '₹${orderAmount.toStringAsFixed(2)} goes to vendor',
                 style: TextStyle(fontSize: 11, color: AppColors.textHint),
               ),
             ),
@@ -177,12 +251,21 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
               width: double.infinity,
               height: 52,
               child: ElevatedButton(
-                onPressed: _isProcessing ? null : () => _placeOrder(orderAmount, platformFee, totalCustomerPays),
+                onPressed: _isProcessing
+                    ? null
+                    : () => _placeOrder(
+                        orderAmount,
+                        platformFee,
+                        totalCustomerPays,
+                      ),
                 child: _isProcessing
                     ? const SizedBox(
                         height: 20,
                         width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
                       )
                     : Text(
                         _paymentMethod == 'upi'
@@ -198,50 +281,233 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
     );
   }
 
-  Future<void> _placeOrder(double orderAmount, double platformFee, double total) async {
+  Future<void> _placeOrder(
+    double orderAmount,
+    double platformFee,
+    double total,
+  ) async {
+    final cartState = ref.read(cartProvider);
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || cartState.storeId == null || cartState.items.isEmpty) {
+      _showError('Your session or cart is no longer valid.');
+      return;
+    }
+    if (_deliveryType == 'delivery' &&
+        (_addressController.text.trim().isEmpty ||
+            _deliveryLatitude == null ||
+            _deliveryLongitude == null)) {
+      _showError('Add the delivery address and map location.');
+      return;
+    }
+
     setState(() => _isProcessing = true);
 
-    final cartState = ref.read(cartProvider);
     final orderId = 'NK${DateTime.now().millisecondsSinceEpoch}';
-    final vendorUpiId = 'saroja.vvce@oksbi';
-    final vendorName = cartState.storeName ?? 'NearKart Vendor';
+    try {
+      final store = await FirebaseFirestore.instance
+          .collection('stores')
+          .doc(cartState.storeId)
+          .get();
+      if (!store.exists) {
+        _showError('This store is no longer available.');
+        return;
+      }
+      final storeData = store.data()!;
+      final vendorUpiId = (storeData['upiId'] ?? '').toString();
+      final vendorName =
+          (storeData['name'] ?? cartState.storeName ?? 'NearKart Store')
+              .toString();
 
-    if (_paymentMethod == 'upi') {
-      if (kIsWeb) {
-        // On web, show QR code for scanning
-        setState(() => _isProcessing = false);
-        if (mounted) {
-          _showUpiQrCode(
-            vendorUpiId: vendorUpiId,
-            vendorName: vendorName,
-            amount: orderAmount,
-            orderId: orderId,
-            total: total,
-          );
-        }
-      } else {
-        // On mobile, open UPI app directly
-        try {
+      Future<bool> saveOrder() => _persistOrder(
+        orderId: orderId,
+        orderAmount: orderAmount,
+        platformFee: platformFee,
+        total: total,
+        storeData: storeData,
+      );
+
+      if (_paymentMethod == 'upi') {
+        if (vendorUpiId.isEmpty) {
+          _showError('UPI is not configured for this store.');
+        } else if (kIsWeb) {
+          setState(() => _isProcessing = false);
+          if (mounted) {
+            _showUpiQrCode(
+              vendorUpiId: vendorUpiId,
+              vendorName: vendorName,
+              amount: orderAmount,
+              orderId: orderId,
+              total: total,
+              onPaymentComplete: saveOrder,
+            );
+          }
+        } else {
           await _paymentService.payVendorViaUpi(
             vendorUpiId: vendorUpiId,
             vendorName: vendorName,
             orderAmount: orderAmount,
             orderId: orderId,
           );
-          if (mounted) _showOrderSuccess(total);
-        } catch (e) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(e.toString()), backgroundColor: AppColors.error),
-            );
-          }
+          if (await saveOrder() && mounted) _showOrderSuccess(total);
         }
-        setState(() => _isProcessing = false);
+      } else {
+        if (await saveOrder() && mounted) _showOrderSuccess(total);
       }
-    } else {
-      _showOrderSuccess(total);
-      setState(() => _isProcessing = false);
+    } catch (_) {
+      _showError('Unable to place the order. Please try again.');
+    } finally {
+      if (mounted && _isProcessing) setState(() => _isProcessing = false);
     }
+  }
+
+  /// Reuses an address the customer has saved or ordered to before.
+  Future<void> _chooseSavedAddress() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      _showError('Please sign in again.');
+      return;
+    }
+
+    final chosen = await showAddressChoiceSheet(context, uid: uid);
+    if (chosen == null || !mounted) return;
+
+    setState(() {
+      _addressController.text = chosen.address;
+      if (chosen.hasLocation) {
+        _deliveryLatitude = chosen.latitude;
+        _deliveryLongitude = chosen.longitude;
+      }
+      final notes = chosen.notes?.trim() ?? '';
+      if (notes.isNotEmpty && _notesController.text.trim().isEmpty) {
+        _notesController.text = notes;
+      }
+    });
+
+    // An address saved without a pin cannot be ordered to, so go straight to
+    // the map rather than failing when they press Place order.
+    if (!chosen.hasLocation) {
+      _showError('That address has no map pin. Set it on the map.');
+      await _chooseOnMap();
+    }
+  }
+
+  /// Picking on the map needs no GPS fix at all, so it stays responsive even
+  /// where location services are slow or unavailable.
+  Future<void> _chooseOnMap() async {
+    final picked = await Navigator.of(context).push<PickedLocation>(
+      MaterialPageRoute(
+        builder: (_) => LocationPickerScreen(
+          title: 'Delivery location',
+          initialLatitude: _deliveryLatitude,
+          initialLongitude: _deliveryLongitude,
+          initialQuery: _addressController.text,
+        ),
+      ),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _deliveryLatitude = picked.latitude;
+      _deliveryLongitude = picked.longitude;
+      if (_addressController.text.trim().isEmpty && picked.address != null) {
+        _addressController.text = picked.address!;
+      }
+    });
+  }
+
+  Future<void> _useCurrentLocation() async {
+    setState(() => _isProcessing = true);
+    try {
+      final location = await LocationService().getCurrentLocation();
+      if (!mounted) return;
+      setState(() {
+        _deliveryLatitude = location.latitude;
+        _deliveryLongitude = location.longitude;
+        // Keep whatever the customer typed if no address could be resolved.
+        if (location.address?.isNotEmpty == true) {
+          _addressController.text = location.address!;
+        }
+      });
+    } on AppException catch (error) {
+      _showError(error.message);
+    } catch (_) {
+      _showError('Unable to get your location. Choose it on the map instead.');
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
+    }
+  }
+
+  Future<bool> _persistOrder({
+    required String orderId,
+    required double orderAmount,
+    required double platformFee,
+    required double total,
+    required Map<String, dynamic> storeData,
+  }) async {
+    final cartState = ref.read(cartProvider);
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || cartState.storeId == null) return false;
+
+    // The contact details come from the signed-in profile, not from the
+    // Firebase Auth record: email and Google sign-in never populate
+    // phoneNumber there, so it would always be blank.
+    final profile = ref.read(authProvider).user;
+
+    final storeLatitude = storeData['latitude'];
+    final storeLongitude = storeData['longitude'];
+    await FirebaseFirestore.instance.collection('orders').doc(orderId).set({
+      'customerId': user.uid,
+      'customerName': profile?.name ?? user.displayName ?? '',
+      'customerPhone': profile?.phone ?? '',
+      'storeId': cartState.storeId,
+      'storeName': storeData['name'] ?? cartState.storeName ?? '',
+      // Copied so the customer and the delivery partner can call the store
+      // without needing to read the store document.
+      'storePhone': storeData['phone']?.toString() ?? '',
+      'items': cartState.items
+          .map(
+            (item) => {
+              'productId': item.product.id,
+              'name': item.product.name,
+              'price': item.product.price,
+              'quantity': item.quantity,
+            },
+          )
+          .toList(),
+      'subtotal': cartState.subtotal,
+      'deliveryFee': orderAmount - cartState.subtotal,
+      'platformFee': platformFee,
+      'totalAmount': total,
+      'status': 'placed',
+      'deliveryType': _deliveryType,
+      'deliveryAddress': _deliveryType == 'delivery'
+          ? _addressController.text.trim()
+          : storeData['address'] ?? '',
+      'deliveryNotes': _notesController.text.trim(),
+      if (_deliveryLatitude != null && _deliveryLongitude != null)
+        'deliveryLocation': GeoPoint(_deliveryLatitude!, _deliveryLongitude!),
+      if (storeLatitude is num && storeLongitude is num)
+        'storeLocation': GeoPoint(
+          storeLatitude.toDouble(),
+          storeLongitude.toDouble(),
+        ),
+      'deliveryMode': storeData['deliveryMode'] ?? 'own',
+      if (storeData['deliveryMode'] != 'partner' &&
+          storeData['deliveryPartnerId'] != null)
+        'assignedDeliveryPartnerId': storeData['deliveryPartnerId'],
+      'paymentMethod': _paymentMethod,
+      'paymentStatus': 'pending',
+      'isPaid': false,
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    return true;
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: AppColors.error),
+    );
   }
 
   void _showUpiQrCode({
@@ -250,8 +516,10 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
     required double amount,
     required String orderId,
     required double total,
+    required Future<bool> Function() onPaymentComplete,
   }) {
-    final upiString = 'upi://pay?pa=$vendorUpiId&pn=${Uri.encodeComponent(vendorName)}&am=${amount.toStringAsFixed(2)}&cu=INR&tr=$orderId&tn=${Uri.encodeComponent("Order #$orderId via NearKart")}';
+    final upiString =
+        'upi://pay?pa=$vendorUpiId&pn=${Uri.encodeComponent(vendorName)}&am=${amount.toStringAsFixed(2)}&cu=INR&tr=$orderId&tn=${Uri.encodeComponent("Order #$orderId via NearKart")}';
 
     showDialog(
       context: context,
@@ -267,74 +535,94 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-            Text(
-              'Scan this QR code with any UPI app\n(GPay, PhonePe, Paytm)',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
-            ),
-            const SizedBox(height: 20),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.primary, width: 2),
+              Text(
+                'Scan this QR code with any UPI app\n(GPay, PhonePe, Paytm)',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
               ),
-              child: QrImageView(
-                data: upiString,
-                version: QrVersions.auto,
-                size: 220,
-                gapless: true,
-                embeddedImage: null,
-                errorStateBuilder: (ctx, err) => const Center(
-                  child: Text('Error generating QR'),
+              const SizedBox(height: 20),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.primary, width: 2),
+                ),
+                child: QrImageView(
+                  data: upiString,
+                  version: QrVersions.auto,
+                  size: 220,
+                  gapless: true,
+                  embeddedImage: null,
+                  errorStateBuilder: (ctx, err) =>
+                      const Center(child: Text('Error generating QR')),
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: AppColors.inputFill,
-                borderRadius: BorderRadius.circular(8),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.inputFill,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Pay to:', style: TextStyle(fontSize: 12)),
+                        Text(
+                          vendorName,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('UPI ID:', style: TextStyle(fontSize: 12)),
+                        Text(
+                          vendorUpiId,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Amount:', style: TextStyle(fontSize: 12)),
+                        Text(
+                          '₹${amount.toStringAsFixed(2)}',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-              child: Column(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Pay to:', style: TextStyle(fontSize: 12)),
-                      Text(vendorName, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('UPI ID:', style: TextStyle(fontSize: 12)),
-                      Text(vendorUpiId, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Amount:', style: TextStyle(fontSize: 12)),
-                      Text('₹${amount.toStringAsFixed(2)}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppColors.primary)),
-                    ],
-                  ),
-                ],
+              const SizedBox(height: 20),
+              _PaymentStatusChecker(
+                onComplete: () async {
+                  Navigator.of(ctx).pop();
+                  if (await onPaymentComplete() && mounted) {
+                    _showOrderSuccess(total);
+                  }
+                },
+                onCancel: () => Navigator.of(ctx).pop(),
               ),
-            ),
-            const SizedBox(height: 20),
-            _PaymentStatusChecker(
-              onComplete: () {
-                Navigator.of(ctx).pop();
-                _showOrderSuccess(total);
-              },
-              onCancel: () => Navigator.of(ctx).pop(),
-            ),
-          ],
+            ],
           ),
         ),
       ),
@@ -359,7 +647,11 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                 color: AppColors.success.withValues(alpha: 0.1),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.check_circle, color: AppColors.success, size: 40),
+              child: const Icon(
+                Icons.check_circle,
+                color: AppColors.success,
+                size: 40,
+              ),
             ),
             const SizedBox(height: 16),
             const Text(
@@ -426,7 +718,10 @@ class _OptionCard extends StatelessWidget {
         ),
         child: Column(
           children: [
-            Icon(icon, color: isSelected ? AppColors.primary : AppColors.textSecondary),
+            Icon(
+              icon,
+              color: isSelected ? AppColors.primary : AppColors.textSecondary,
+            ),
             const SizedBox(height: 8),
             Text(
               label,
@@ -472,7 +767,10 @@ class _PaymentOption extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Icon(icon, color: isSelected ? AppColors.primary : AppColors.textSecondary),
+            Icon(
+              icon,
+              color: isSelected ? AppColors.primary : AppColors.textSecondary,
+            ),
             const SizedBox(width: 12),
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -481,7 +779,9 @@ class _PaymentOption extends StatelessWidget {
                   label,
                   style: TextStyle(
                     fontWeight: FontWeight.w500,
-                    color: isSelected ? AppColors.primary : AppColors.textPrimary,
+                    color: isSelected
+                        ? AppColors.primary
+                        : AppColors.textPrimary,
                   ),
                 ),
                 Text(
@@ -492,7 +792,11 @@ class _PaymentOption extends StatelessWidget {
             ),
             const Spacer(),
             if (isSelected)
-              const Icon(Icons.check_circle, color: AppColors.primary, size: 20),
+              const Icon(
+                Icons.check_circle,
+                color: AppColors.primary,
+                size: 20,
+              ),
           ],
         ),
       ),
@@ -564,7 +868,10 @@ class _PaymentStatusCheckerState extends State<_PaymentStatusChecker> {
         const SizedBox(
           width: 24,
           height: 24,
-          child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary),
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: AppColors.primary,
+          ),
         ),
         const SizedBox(height: 12),
         Text(
@@ -583,7 +890,10 @@ class _PaymentStatusCheckerState extends State<_PaymentStatusChecker> {
         const SizedBox(height: 16),
         TextButton(
           onPressed: widget.onCancel,
-          child: const Text('Cancel Payment', style: TextStyle(color: AppColors.error)),
+          child: const Text(
+            'Cancel Payment',
+            style: TextStyle(color: AppColors.error),
+          ),
         ),
       ],
     );

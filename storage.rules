@@ -14,16 +14,35 @@ service firebase.storage {
       return request.resource.size < 5 * 1024 * 1024;
     }
 
+    function isAdmin() {
+      return isAuthenticated() &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid))
+          .data.role == 'admin';
+    }
+
+    // Only the manager who owns the store may upload its imagery, so a
+    // signed-in customer cannot fill another store's folder.
+    function ownsStore(storeId) {
+      return isAuthenticated() &&
+        firestore.get(/databases/(default)/documents/stores/$(storeId))
+          .data.ownerId == request.auth.uid;
+    }
+
+    function canWriteStoreImage(storeId) {
+      return isImageType() && isUnder5MB() &&
+        (ownsStore(storeId) || isAdmin());
+    }
+
     // Store images
     match /stores/{storeId}/{allPaths=**} {
       allow read: if true;
-      allow write: if isAuthenticated() && isImageType() && isUnder5MB();
+      allow write: if canWriteStoreImage(storeId);
     }
 
     // Product images
     match /products/{storeId}/{allPaths=**} {
       allow read: if true;
-      allow write: if isAuthenticated() && isImageType() && isUnder5MB();
+      allow write: if canWriteStoreImage(storeId);
     }
 
     // User avatars

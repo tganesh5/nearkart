@@ -43,3 +43,13 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Local tooling
+node_modules/
+
+# Service account keys must never be committed. Keep them outside the repo and
+# point GOOGLE_APPLICATION_CREDENTIALS at them instead.
+*serviceAccount*.json
+*service-account*.json
+*-adminsdk-*.json
+.secrets/

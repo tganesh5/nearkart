@@ -16,25 +16,36 @@ class CustomerShell extends ConsumerStatefulWidget {
 }
 
 class _CustomerShellState extends ConsumerState<CustomerShell> {
+  static const _searchTab = 1;
+
   int _currentIndex = 0;
 
-  final _screens = const [
-    CustomerHomeScreen(),
-    CustomerSearchScreen(),
-    CartScreen(),
-    CustomerOrdersScreen(),
-    CustomerProfileScreen(),
-  ];
+  void _goToTab(int index) => setState(() => _currentIndex = index);
+
+  Widget _screenFor(int index) {
+    switch (index) {
+      case 1:
+        return const CustomerSearchScreen();
+      case 2:
+        return const CartScreen();
+      case 3:
+        return const CustomerOrdersScreen();
+      case 4:
+        return const CustomerProfileScreen();
+      default:
+        return CustomerHomeScreen(onSeeAllStores: () => _goToTab(_searchTab));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final cartState = ref.watch(cartProvider);
 
     return Scaffold(
-      body: _screens[_currentIndex],
+      body: _screenFor(_currentIndex),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
-        onDestinationSelected: (index) => setState(() => _currentIndex = index),
+        onDestinationSelected: _goToTab,
         backgroundColor: Colors.white,
         indicatorColor: AppColors.primaryLight,
         destinations: [

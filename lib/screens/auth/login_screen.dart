@@ -3,13 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import '../../core/config/env_config.dart';
+import '../../core/utils/phone_auth.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/constants/app_constants.dart';
-import '../../models/user_model.dart';
 import '../../providers/auth_provider.dart';
+import 'role_home.dart';
 import 'signup_screen.dart';
-import '../customer/customer_shell.dart';
-import '../vendor/vendor_shell.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -22,14 +22,32 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  UserRole _selectedRole = UserRole.customer;
   bool _obscurePassword = true;
+  bool _googleReady = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _prepareGoogleSignIn();
+  }
 
   @override
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  Future<void> _prepareGoogleSignIn() async {
+    if (kIsWeb || _googleReady) return;
+    try {
+      await GoogleSignIn.instance.initialize(
+        serverClientId: EnvConfig.googleServerClientId,
+      );
+      _googleReady = true;
+    } catch (_) {
+      // authenticate() will surface the real error if init never completed.
+    }
   }
 
   Future<void> _handleLogin() async {
@@ -39,23 +57,21 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     final success = await auth.login(
       _emailController.text.trim(),
       _passwordController.text,
-      _selectedRole,
     );
 
     if (!mounted) return;
 
     final authState = ref.read(authProvider);
-    if (success) {
+    if (success && authState.user != null) {
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => _selectedRole == UserRole.vendor
-              ? const VendorShell()
-              : const CustomerShell(),
-        ),
+        MaterialPageRoute(builder: (_) => RoleHome(user: authState.user!)),
       );
     } else if (authState.error != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(authState.error!), backgroundColor: AppColors.error),
+        SnackBar(
+          content: Text(authState.error!),
+          backgroundColor: AppColors.error,
+        ),
       );
     }
   }
@@ -66,47 +82,107 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
       if (kIsWeb) {
         final googleProvider = GoogleAuthProvider();
-        userCredential =
-            await FirebaseAuth.instance.signInWithPopup(googleProvider);
-      } else {
-        final googleSignIn = GoogleSignIn.instance;
-        await googleSignIn.initialize();
-        final googleUser = await googleSignIn.authenticate();
-        final googleAuth = googleUser.authentication;
-        final credential = GoogleAuthProvider.credential(
-          idToken: googleAuth.idToken,
+        userCredential = await FirebaseAuth.instance.signInWithPopup(
+          googleProvider,
         );
-        userCredential =
-            await FirebaseAuth.instance.signInWithCredential(credential);
+      } else {
+        await _prepareGoogleSignIn();
+        final googleUser = await GoogleSignIn.instance.authenticate(
+          scopeHint: const ['email', 'profile'],
+        );
+        final idToken = googleUser.authentication.idToken;
+        if (idToken == null || idToken.isEmpty) {
+          throw const _SignInMessage(
+            'Google did not return an ID token. Try again, or use email '
+            'and password.',
+          );
+        }
+        userCredential = await FirebaseAuth.instance.signInWithCredential(
+          GoogleAuthProvider.credential(idToken: idToken),
+        );
       }
 
       if (!mounted) return;
 
       final user = userCredential.user;
-      if (user == null) throw Exception('No user returned');
+      if (user == null) {
+        throw const _SignInMessage('Google sign-in did not return an account.');
+      }
 
       final auth = ref.read(authProvider.notifier);
-      final success =
-          await auth.loginWithFirebaseUser(user, _selectedRole);
+      final success = await auth.loginWithFirebaseUser(user);
+      final authState = ref.read(authProvider);
 
-      if (mounted && success) {
+      if (mounted && success && authState.user != null) {
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (_) => _selectedRole == UserRole.vendor
-                ? const VendorShell()
-                : const CustomerShell(),
-          ),
+          MaterialPageRoute(builder: (_) => RoleHome(user: authState.user!)),
         );
+      } else if (mounted && authState.error != null) {
+        _showError(authState.error!);
       }
-    } catch (e) {
+    } on GoogleSignInException catch (error) {
+      if (!mounted) return;
+      if (error.code == GoogleSignInExceptionCode.canceled) return;
+      _showError(_googleError(error));
+    } on FirebaseAuthException catch (error) {
+      if (!mounted) return;
+      _showError(
+        ref.read(authProvider.notifier).messageForAuthCode(error.code),
+      );
+    } on _SignInMessage catch (error) {
+      if (mounted) _showError(error.message);
+    } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Google sign-in failed: $e'),
-            backgroundColor: AppColors.error,
-          ),
+        _showError(
+          'Google sign-in failed. Check your internet connection and try again.',
         );
       }
+    }
+  }
+
+  String _googleError(GoogleSignInException error) {
+    return switch (error.code) {
+      GoogleSignInExceptionCode.clientConfigurationError =>
+        'Google Sign-In is not configured for this build.',
+      GoogleSignInExceptionCode.providerConfigurationError =>
+        'Google Play services could not complete sign-in. '
+            'Update Play services or try email and password.',
+      GoogleSignInExceptionCode.interrupted =>
+        'Google sign-in was interrupted. Please try again.',
+      GoogleSignInExceptionCode.uiUnavailable =>
+        'Google sign-in could not open. Try email and password.',
+      _ =>
+        error.description?.trim().isNotEmpty == true
+            ? error.description!
+            : 'Google sign-in failed. Please try again.',
+    };
+  }
+
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: AppColors.error),
+    );
+  }
+
+  Future<void> _forgotPassword() async {
+    final email = displayEmail(_emailController.text);
+    if (email.isEmpty) {
+      _showError(
+        'Password reset needs an email address. Enter the email on the '
+        'account, or ask an admin if you signed up with a mobile number only.',
+      );
+      return;
+    }
+
+    final sent = await ref.read(authProvider.notifier).sendPasswordReset(email);
+    if (!mounted) return;
+    if (sent) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Password reset email sent to $email.')),
+      );
+    } else {
+      final error = ref.read(authProvider).error;
+      _showError(error ?? 'Could not send the reset email.');
     }
   }
 
@@ -145,75 +221,48 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   AppConstants.appName,
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.primary,
-                      ),
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.primary,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Text(
                   AppConstants.appTagline,
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: AppColors.textSecondary,
-                      ),
+                    color: AppColors.textSecondary,
+                  ),
                 ),
                 const SizedBox(height: 48),
-                Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    color: AppColors.inputFill,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: _RoleTab(
-                          label: 'Customer',
-                          icon: Icons.person_outline,
-                          isSelected: _selectedRole == UserRole.customer,
-                          onTap: () => setState(() => _selectedRole = UserRole.customer),
-                        ),
-                      ),
-                      Expanded(
-                        child: _RoleTab(
-                          label: 'Vendor',
-                          icon: Icons.store_outlined,
-                          isSelected: _selectedRole == UserRole.vendor,
-                          onTap: () => setState(() => _selectedRole = UserRole.vendor),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 32),
                 TextFormField(
                   controller: _emailController,
                   keyboardType: TextInputType.emailAddress,
+                  textInputAction: TextInputAction.next,
                   decoration: const InputDecoration(
-                    hintText: 'Email Address',
-                    prefixIcon: Icon(Icons.email_outlined),
+                    hintText: 'Email or mobile number',
+                    prefixIcon: Icon(Icons.person_outline),
                   ),
-                  validator: (val) {
-                    if (val == null ||
-                        !RegExp(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
-                            .hasMatch(val)) {
-                      return 'Enter a valid email address';
-                    }
-                    return null;
-                  },
+                  validator: loginIdentifier,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _passwordController,
                   obscureText: _obscurePassword,
+                  textInputAction: TextInputAction.done,
+                  onFieldSubmitted: (_) {
+                    if (!authState.isLoading) _handleLogin();
+                  },
                   decoration: InputDecoration(
                     hintText: 'Password',
                     prefixIcon: const Icon(Icons.lock_outline),
                     suffixIcon: IconButton(
                       icon: Icon(
-                        _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                        _obscurePassword
+                            ? Icons.visibility_off
+                            : Icons.visibility,
                       ),
-                      onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                      onPressed: () =>
+                          setState(() => _obscurePassword = !_obscurePassword),
                     ),
                   ),
                   validator: (val) {
@@ -223,7 +272,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     return null;
                   },
                 ),
-                const SizedBox(height: 24),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: authState.isLoading ? null : _forgotPassword,
+                    child: const Text('Forgot password?'),
+                  ),
+                ),
+                const SizedBox(height: 8),
                 SizedBox(
                   height: 52,
                   child: ElevatedButton(
@@ -246,7 +302,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     const Expanded(child: Divider()),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Text('OR', style: TextStyle(color: AppColors.textHint, fontSize: 12)),
+                      child: Text(
+                        'OR',
+                        style: TextStyle(
+                          color: AppColors.textHint,
+                          fontSize: 12,
+                        ),
+                      ),
                     ),
                     const Expanded(child: Divider()),
                   ],
@@ -260,7 +322,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       'https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg',
                       height: 20,
                       width: 20,
-                      errorBuilder: (_, __, ___) => const Icon(Icons.g_mobiledata, size: 24),
+                      errorBuilder: (_, __, ___) =>
+                          const Icon(Icons.g_mobiledata, size: 24),
                     ),
                     label: const Text('Continue with Google'),
                     style: OutlinedButton.styleFrom(
@@ -282,7 +345,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       onPressed: () {
                         Navigator.of(context).push(
                           MaterialPageRoute(
-                            builder: (_) => SignupScreen(role: _selectedRole),
+                            builder: (_) => const SignupScreen(),
                           ),
                         );
                       },
@@ -299,51 +362,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 }
 
-class _RoleTab extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool isSelected;
-  final VoidCallback onTap;
+class _SignInMessage implements Exception {
+  const _SignInMessage(this.message);
 
-  const _RoleTab({
-    required this.label,
-    required this.icon,
-    required this.isSelected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          color: isSelected ? Colors.white : Colors.transparent,
-          borderRadius: BorderRadius.circular(10),
-          boxShadow: isSelected
-              ? [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 4)]
-              : null,
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              icon,
-              size: 18,
-              color: isSelected ? AppColors.primary : AppColors.textSecondary,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                color: isSelected ? AppColors.primary : AppColors.textSecondary,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  final String message;
 }

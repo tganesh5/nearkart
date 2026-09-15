@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 class ProductModel {
   final String id;
   final String storeId;
@@ -30,6 +32,30 @@ class ProductModel {
     this.stockCount = 100,
     required this.createdAt,
   });
+
+  factory ProductModel.fromMap(String id, Map<String, dynamic> map) {
+    return ProductModel(
+      id: id,
+      storeId: map['storeId']?.toString() ?? '',
+      name: map['name']?.toString() ?? 'Unnamed product',
+      description: map['description']?.toString() ?? '',
+      category: map['category']?.toString() ?? 'General',
+      price: (map['price'] as num?)?.toDouble() ?? 0,
+      mrp: (map['mrp'] as num?)?.toDouble(),
+      unit: map['unit']?.toString() ?? 'piece',
+      quantity: (map['quantity'] as num?)?.toDouble() ?? 1.0,
+      imageUrl: map['imageUrl']?.toString(),
+      isAvailable: map['isAvailable'] != false,
+      isFeatured: map['isFeatured'] == true,
+      stockCount: (map['stockCount'] as num?)?.toInt() ?? 0,
+      createdAt:
+          (map['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+    );
+  }
+
+  factory ProductModel.fromDoc(
+    DocumentSnapshot<Map<String, dynamic>> doc,
+  ) => ProductModel.fromMap(doc.id, doc.data() ?? const {});
 
   double get discount {
     if (mrp == null || mrp! <= price) return 0;

@@ -11,54 +11,188 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
     
-    function isVendor() {
-      return isAuthenticated() && 
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'vendor';
+    function hasRole(role) {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == role &&
+        (
+          !('status' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data) ||
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active'
+        );
+    }
+
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
+    function isStoreManager() {
+      return hasRole('storeManager') || hasRole('vendor');
+    }
+
+    function isDeliveryPartner() {
+      return hasRole('deliveryPartner');
+    }
+
+    function ownsStore(storeId) {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/stores/$(storeId)).data.ownerId == request.auth.uid;
+    }
+
+    // A store an admin has suspended or blacklisted. Defaults keep stores that
+    // predate these fields fully usable.
+    function storeIsUsable(storeId) {
+      let store = get(/databases/$(database)/documents/stores/$(storeId)).data;
+      return store.get('isActive', true) == true &&
+        store.get('isBlacklisted', false) == false;
+    }
+
+    // Contact numbers are copied onto the order so each party can call the
+    // others without being able to read their profile. Since the customer
+    // writes the order, the numbers are checked against their source here:
+    // otherwise a customer could point the store's or their own "call" button
+    // at any number they liked.
+    function contactsAreGenuine(order) {
+      let store = get(/databases/$(database)/documents/stores/$(order.storeId)).data;
+      let profile = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return order.get('storePhone', '') == store.get('phone', '') &&
+        order.get('customerPhone', '') == profile.get('phone', '') &&
+        profile.get('phone', '') != '';
+    }
+
+    function ownsUsableStore(storeId) {
+      let store = get(/databases/$(database)/documents/stores/$(storeId)).data;
+      return isAuthenticated() &&
+        store.ownerId == request.auth.uid &&
+        store.get('isActive', true) == true &&
+        store.get('isBlacklisted', false) == false;
     }
 
     // Users collection
     match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow create: if isOwner(userId);
-      allow update: if isOwner(userId);
+      allow read: if isOwner(userId) || isAdmin() ||
+        (isStoreManager() && resource.data.role == 'deliveryPartner');
+      // Admins onboard staff directly, so they pick the role and status. Self
+      // signup may not: it would let anyone make themselves an admin.
+      allow create: if isAdmin() ||
+        (isOwner(userId) &&
+          request.resource.data.role in
+            ['customer', 'storeManager', 'admin', 'deliveryPartner'] &&
+          (
+            (request.resource.data.role == 'customer' &&
+              request.resource.data.status == 'active') ||
+            (request.resource.data.role != 'customer' &&
+              request.resource.data.status == 'pending')
+          ));
+      allow update: if isAdmin() ||
+        (isOwner(userId) &&
+          !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['role', 'status']));
       allow delete: if false;
+    }
+
+    // Subcollections are not covered by the rules above, so they need their
+    // own match blocks. Both are private to the owning user.
+    match /users/{userId}/addresses/{addressId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    match /users/{userId}/wishlist/{productId} {
+      allow read, write: if isOwner(userId);
     }
 
     // Stores collection
     match /stores/{storeId} {
       allow read: if true;
-      allow create: if isVendor();
-      allow update: if isAuthenticated() && 
-        resource.data.ownerId == request.auth.uid;
+      allow create: if isAdmin();
+
+      // Moderation state belongs to admins alone. Without this a manager could
+      // re-activate a store an admin suspended, self-verify, or edit their own
+      // rating.
+      allow update: if isAdmin() ||
+        (isStoreManager() &&
+          resource.data.ownerId == request.auth.uid &&
+          resource.data.get('isBlacklisted', false) == false &&
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+            'ownerId', 'isActive', 'isBlacklisted', 'blacklistReason',
+            'blacklistedAt', 'isVerified', 'rating', 'totalRatings'
+          ]));
       allow delete: if false;
+    }
+
+    // Platform configuration. The fee rule and the payee UPI id have to be
+    // readable by customer devices to build the payment request; payout bank
+    // details stay admin-only under a separate document.
+    match /settings/platform {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /settings/{document} {
+      allow read, write: if isAdmin();
     }
 
     // Products collection
     match /products/{productId} {
       allow read: if true;
-      allow create: if isVendor();
-      allow update, delete: if isAuthenticated() && 
-        get(/databases/$(database)/documents/stores/$(resource.data.storeId)).data.ownerId == request.auth.uid;
+      // A suspended or blacklisted store cannot change its catalogue.
+      allow create: if isAdmin() ||
+        (isStoreManager() && ownsUsableStore(request.resource.data.storeId));
+      allow update: if isAdmin() ||
+        (isStoreManager() &&
+          ownsUsableStore(resource.data.storeId) &&
+          request.resource.data.storeId == resource.data.storeId);
+      allow delete: if isAdmin() ||
+        (isStoreManager() && ownsUsableStore(resource.data.storeId));
     }
 
     // Orders collection
     match /orders/{orderId} {
-      allow read: if isAuthenticated() && (
+      allow read: if isAdmin() || (isAuthenticated() && (
         resource.data.customerId == request.auth.uid ||
-        get(/databases/$(database)/documents/stores/$(resource.data.storeId)).data.ownerId == request.auth.uid
-      );
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated() && (
-        resource.data.customerId == request.auth.uid ||
-        get(/databases/$(database)/documents/stores/$(resource.data.storeId)).data.ownerId == request.auth.uid
-      );
+        ownsStore(resource.data.storeId) ||
+        (isDeliveryPartner() &&
+          resource.data.assignedDeliveryPartnerId == request.auth.uid)
+      ));
+      // No new orders for a suspended or blacklisted store. Updates below
+      // still use ownsStore so in-flight orders can be fulfilled.
+      allow create: if hasRole('customer') &&
+        request.resource.data.customerId == request.auth.uid &&
+        storeIsUsable(request.resource.data.storeId) &&
+        contactsAreGenuine(request.resource.data);
+
+      // Every writer must be authenticated and must leave the parties to the
+      // order untouched. Who may change what is then decided per role.
+      allow update: if isAuthenticated() &&
+        request.resource.data.customerId == resource.data.customerId &&
+        request.resource.data.storeId == resource.data.storeId &&
+        (
+          isAdmin() ||
+
+          // The owning store may progress the order and assign a partner.
+          ownsStore(resource.data.storeId) ||
+
+          // The assigned partner may move delivery forward, but may not
+          // reassign the order to somebody else.
+          (isDeliveryPartner() &&
+            resource.data.assignedDeliveryPartnerId == request.auth.uid &&
+            request.resource.data.assignedDeliveryPartnerId ==
+              resource.data.assignedDeliveryPartnerId) ||
+
+          // The customer may only cancel their own order, and only before the
+          // store has started preparing it.
+          (resource.data.customerId == request.auth.uid &&
+            request.resource.data.status == 'cancelled' &&
+            resource.data.status in ['placed', 'confirmed'] &&
+            request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['status', 'updatedAt', 'cancelledAt']))
+        );
       allow delete: if false;
     }
 
     // Reviews collection
     match /reviews/{reviewId} {
       allow read: if true;
-      allow create: if isAuthenticated();
+      allow create: if hasRole('customer') &&
+        request.resource.data.customerId == request.auth.uid;
       allow update, delete: if false;
     }
   }

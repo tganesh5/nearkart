@@ -1,10 +1,14 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/app_colors.dart';
 import '../../models/store_model.dart';
 import '../../models/product_model.dart';
-import '../../services/mock_data.dart';
 import '../../providers/cart_provider.dart';
+import '../../providers/catalog_provider.dart';
+import '../cart/cart_screen.dart';
+import 'wishlist_screen.dart';
 
 class StoreDetailScreen extends ConsumerWidget {
   final StoreModel store;
@@ -13,7 +17,8 @@ class StoreDetailScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final products = MockData.getProductsForStore(store.id);
+    final productsAsync = ref.watch(storeProductsProvider(store.id));
+    final products = productsAsync.value ?? const <ProductModel>[];
     final cartState = ref.watch(cartProvider);
 
     return Scaffold(
@@ -71,7 +76,11 @@ class StoreDetailScreen extends ConsumerWidget {
                           ),
                           child: const Row(
                             children: [
-                              Icon(Icons.verified, size: 14, color: AppColors.primary),
+                              Icon(
+                                Icons.verified,
+                                size: 14,
+                                color: AppColors.primary,
+                              ),
                               SizedBox(width: 4),
                               Text(
                                 'Verified',
@@ -89,7 +98,10 @@ class StoreDetailScreen extends ConsumerWidget {
                   const SizedBox(height: 6),
                   Text(
                     store.description,
-                    style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 13,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   Row(
@@ -101,24 +113,37 @@ class StoreDetailScreen extends ConsumerWidget {
                         style: const TextStyle(fontSize: 13),
                       ),
                       const SizedBox(width: 16),
-                      Icon(Icons.access_time, size: 14, color: AppColors.textHint),
+                      Icon(
+                        Icons.access_time,
+                        size: 14,
+                        color: AppColors.textHint,
+                      ),
                       const SizedBox(width: 4),
                       Text(
                         '${store.openTime} - ${store.closeTime}',
-                        style: TextStyle(fontSize: 12, color: AppColors.textHint),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textHint,
+                        ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 8),
                   Row(
                     children: [
-                      Icon(Icons.location_on_outlined,
-                          size: 14, color: AppColors.textHint),
+                      Icon(
+                        Icons.location_on_outlined,
+                        size: 14,
+                        color: AppColors.textHint,
+                      ),
                       const SizedBox(width: 4),
                       Expanded(
                         child: Text(
                           store.address,
-                          style: TextStyle(fontSize: 12, color: AppColors.textHint),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.textHint,
+                          ),
                         ),
                       ),
                     ],
@@ -163,26 +188,47 @@ class StoreDetailScreen extends ConsumerWidget {
               ),
             ),
           ),
-          SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            sliver: SliverGrid(
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                childAspectRatio: 0.72,
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 12,
+          if (productsAsync.isLoading && products.isEmpty)
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: Center(child: CircularProgressIndicator()),
               ),
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  return _ProductCard(
+            )
+          else if (products.isEmpty)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Center(
+                  child: Text(
+                    productsAsync.hasError
+                        ? 'Unable to load this store\'s products.'
+                        : 'This store has not listed any products yet.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: AppColors.textSecondary),
+                  ),
+                ),
+              ),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              sliver: SliverGrid(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  childAspectRatio: 0.72,
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 12,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => _ProductCard(
                     product: products[index],
                     storeName: store.name,
-                  );
-                },
-                childCount: products.length,
+                  ),
+                  childCount: products.length,
+                ),
               ),
             ),
-          ),
           const SliverPadding(padding: EdgeInsets.only(bottom: 100)),
         ],
       ),
@@ -207,18 +253,24 @@ class StoreDetailScreen extends ConsumerWidget {
                     ),
                     const Spacer(),
                     TextButton(
-                      onPressed: () => Navigator.of(context).pop(),
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const CartScreen()),
+                      ),
                       child: const Row(
                         children: [
                           Text(
-                            'View Cart',
+                            'Proceed to Checkout',
                             style: TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
                           SizedBox(width: 4),
-                          Icon(Icons.arrow_forward, color: Colors.white, size: 18),
+                          Icon(
+                            Icons.arrow_forward,
+                            color: Colors.white,
+                            size: 18,
+                          ),
                         ],
                       ),
                     ),
@@ -264,7 +316,16 @@ class _ProductCard extends ConsumerWidget {
               child: Stack(
                 children: [
                   const Center(
-                    child: Icon(Icons.image, size: 40, color: AppColors.textHint),
+                    child: Icon(
+                      Icons.image,
+                      size: 40,
+                      color: AppColors.textHint,
+                    ),
+                  ),
+                  Positioned(
+                    top: 2,
+                    right: 2,
+                    child: _WishlistButton(product: product),
                   ),
                   if (product.discount > 0)
                     Positioned(
@@ -347,7 +408,9 @@ class _ProductCard extends ConsumerWidget {
                               cart.addItem(product, storeName: storeName);
                             },
                             style: ElevatedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                              ),
                               textStyle: const TextStyle(fontSize: 12),
                             ),
                             child: const Text('ADD'),
@@ -364,10 +427,15 @@ class _ProductCard extends ConsumerWidget {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               InkWell(
-                                onTap: () => cart.updateQuantity(product.id, qty - 1),
+                                onTap: () =>
+                                    cart.updateQuantity(product.id, qty - 1),
                                 child: const Padding(
                                   padding: EdgeInsets.symmetric(horizontal: 8),
-                                  child: Icon(Icons.remove, size: 16, color: Colors.white),
+                                  child: Icon(
+                                    Icons.remove,
+                                    size: 16,
+                                    color: Colors.white,
+                                  ),
                                 ),
                               ),
                               Text(
@@ -379,10 +447,15 @@ class _ProductCard extends ConsumerWidget {
                                 ),
                               ),
                               InkWell(
-                                onTap: () => cart.addItem(product, storeName: storeName),
+                                onTap: () =>
+                                    cart.addItem(product, storeName: storeName),
                                 child: const Padding(
                                   padding: EdgeInsets.symmetric(horizontal: 8),
-                                  child: Icon(Icons.add, size: 16, color: Colors.white),
+                                  child: Icon(
+                                    Icons.add,
+                                    size: 16,
+                                    color: Colors.white,
+                                  ),
                                 ),
                               ),
                             ],
@@ -396,6 +469,51 @@ class _ProductCard extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Heart toggle backed by users/{uid}/wishlist/{productId}.
+class _WishlistButton extends StatelessWidget {
+  const _WishlistButton({required this.product});
+
+  final ProductModel product;
+
+  @override
+  Widget build(BuildContext context) {
+    final collection = WishlistScreen.collectionFor(
+      FirebaseAuth.instance.currentUser?.uid,
+    );
+    if (collection == null) return const SizedBox.shrink();
+
+    final doc = collection.doc(product.id);
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: doc.snapshots(),
+      builder: (context, snapshot) {
+        final saved = snapshot.data?.exists == true;
+        return IconButton(
+          visualDensity: VisualDensity.compact,
+          tooltip: saved ? 'Remove from wishlist' : 'Save for later',
+          icon: Icon(
+            saved ? Icons.favorite : Icons.favorite_border,
+            size: 20,
+            color: saved ? AppColors.secondary : AppColors.textHint,
+          ),
+          onPressed: () async {
+            if (saved) {
+              await doc.delete();
+            } else {
+              await doc.set({
+                'name': product.name,
+                'storeId': product.storeId,
+                'price': product.price,
+                'createdAt': FieldValue.serverTimestamp(),
+              });
+            }
+          },
+        );
+      },
     );
   }
 }

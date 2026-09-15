@@ -1,16 +1,22 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../core/theme/app_colors.dart';
 import '../../core/constants/app_constants.dart';
-import '../../services/mock_data.dart';
 import '../../models/store_model.dart';
+import '../../providers/catalog_provider.dart';
+import 'customer_search_screen.dart';
 import 'store_detail_screen.dart';
 
-class CustomerHomeScreen extends StatelessWidget {
-  const CustomerHomeScreen({super.key});
+class CustomerHomeScreen extends ConsumerWidget {
+  final VoidCallback? onSeeAllStores;
+
+  const CustomerHomeScreen({super.key, this.onSeeAllStores});
 
   @override
-  Widget build(BuildContext context) {
-    final stores = MockData.stores;
+  Widget build(BuildContext context, WidgetRef ref) {
+    final storesAsync = ref.watch(storesProvider);
+    final stores = storesAsync.value ?? const <StoreModel>[];
 
     return Scaffold(
       body: CustomScrollView(
@@ -24,11 +30,18 @@ class CustomerHomeScreen extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    const Icon(Icons.location_on, size: 16, color: AppColors.primary),
+                    const Icon(
+                      Icons.location_on,
+                      size: 16,
+                      color: AppColors.primary,
+                    ),
                     const SizedBox(width: 4),
                     Text(
                       'Koramangala, Bangalore',
-                      style: TextStyle(fontSize: 14, color: AppColors.textPrimary),
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: AppColors.textPrimary,
+                      ),
                     ),
                     const Icon(Icons.keyboard_arrow_down, size: 18),
                   ],
@@ -38,7 +51,12 @@ class CustomerHomeScreen extends StatelessWidget {
             actions: [
               IconButton(
                 icon: const Icon(Icons.notifications_outlined),
-                onPressed: () {},
+                tooltip: 'Notifications',
+                onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Notifications are coming soon.'),
+                  ),
+                ),
               ),
             ],
           ),
@@ -92,7 +110,10 @@ class CustomerHomeScreen extends StatelessWidget {
                                 ),
                                 child: const Text(
                                   '5 stores near you',
-                                  style: TextStyle(color: Colors.white, fontSize: 12),
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                  ),
                                 ),
                               ),
                             ],
@@ -110,8 +131,8 @@ class CustomerHomeScreen extends StatelessWidget {
                   Text(
                     'Shop by Category',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   const SizedBox(height: 12),
                 ],
@@ -125,7 +146,10 @@ class CustomerHomeScreen extends StatelessWidget {
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 children: [
-                  _CategoryChip(icon: Icons.local_grocery_store, label: 'Grocery'),
+                  _CategoryChip(
+                    icon: Icons.local_grocery_store,
+                    label: 'Grocery',
+                  ),
                   _CategoryChip(icon: Icons.eco, label: 'Vegetables'),
                   _CategoryChip(icon: Icons.cake, label: 'Bakery'),
                   _CategoryChip(icon: Icons.local_pharmacy, label: 'Pharmacy'),
@@ -144,34 +168,58 @@ class CustomerHomeScreen extends StatelessWidget {
                   Text(
                     'Stores Near You',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   TextButton(
-                    onPressed: () {},
+                    onPressed: onSeeAllStores,
                     child: const Text('See All'),
                   ),
                 ],
               ),
             ),
           ),
-          SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
+          if (storesAsync.isLoading && stores.isEmpty)
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            )
+          else if (storesAsync.hasError && stores.isEmpty)
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: Center(child: Text('Unable to load nearby stores.')),
+              ),
+            )
+          else if (stores.isEmpty)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Center(
+                  child: Text(
+                    'No stores are listed yet. Please check back soon.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: AppColors.textSecondary),
+                  ),
+                ),
+              ),
+            )
+          else
+            SliverList(
+              delegate: SliverChildBuilderDelegate((context, index) {
+                final store = stores[index];
                 return _StoreCard(
-                  store: stores[index],
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => StoreDetailScreen(store: stores[index]),
-                      ),
-                    );
-                  },
+                  store: store,
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => StoreDetailScreen(store: store),
+                    ),
+                  ),
                 );
-              },
-              childCount: stores.length,
+              }, childCount: stores.length),
             ),
-          ),
           const SliverPadding(padding: EdgeInsets.only(bottom: 20)),
         ],
       ),
@@ -187,27 +235,42 @@ class _CategoryChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return SizedBox(
       width: 80,
-      margin: const EdgeInsets.only(right: 12),
-      child: Column(
-        children: [
-          Container(
-            width: 56,
-            height: 56,
-            decoration: BoxDecoration(
-              color: AppColors.primaryLight,
-              borderRadius: BorderRadius.circular(16),
+      child: Padding(
+        padding: const EdgeInsets.only(right: 12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          // Shows the stores in this category, which is what the search
+          // screen already filters on.
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => CustomerSearchScreen(initialQuery: label),
             ),
-            child: Icon(icon, color: AppColors.primary, size: 28),
           ),
-          const SizedBox(height: 8),
-          Text(
-            label,
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
-            textAlign: TextAlign.center,
+          child: Column(
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: AppColors.primaryLight,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Icon(icon, color: AppColors.primary, size: 28),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -247,7 +310,11 @@ class _StoreCard extends StatelessWidget {
                 color: AppColors.primaryLight,
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: const Icon(Icons.store, color: AppColors.primary, size: 32),
+              child: const Icon(
+                Icons.store,
+                color: AppColors.primary,
+                size: 32,
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -266,13 +333,20 @@ class _StoreCard extends StatelessWidget {
                         ),
                       ),
                       if (store.isVerified)
-                        const Icon(Icons.verified, size: 16, color: AppColors.primary),
+                        const Icon(
+                          Icons.verified,
+                          size: 16,
+                          color: AppColors.primary,
+                        ),
                     ],
                   ),
                   const SizedBox(height: 4),
                   Text(
                     store.category,
-                    style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                    ),
                   ),
                   const SizedBox(height: 6),
                   Row(
@@ -288,14 +362,23 @@ class _StoreCard extends StatelessWidget {
                       ),
                       Text(
                         ' (${store.totalRatings})',
-                        style: TextStyle(fontSize: 11, color: AppColors.textHint),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: AppColors.textHint,
+                        ),
                       ),
                       const SizedBox(width: 12),
-                      Icon(Icons.location_on_outlined,
-                          size: 13, color: AppColors.textHint),
+                      Icon(
+                        Icons.location_on_outlined,
+                        size: 13,
+                        color: AppColors.textHint,
+                      ),
                       Text(
                         ' 1.2 km',
-                        style: TextStyle(fontSize: 11, color: AppColors.textHint),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: AppColors.textHint,
+                        ),
                       ),
                       const Spacer(),
                       if (store.isOpen)

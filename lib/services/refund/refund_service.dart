@@ -52,8 +52,11 @@ class RefundService {
     return refundInfo;
   }
 
-  /// Process the actual UPI refund
-  /// In production, this would use a payment gateway (Razorpay/Cashfree)
+  /// Process the actual UPI refund.
+  ///
+  /// Not wired up: the app takes payment through UPI deep links, which give it
+  /// no payment id to reverse. A real refund needs either a payment gateway or
+  /// a payout API, neither of which is integrated.
   Future<void> _processRefund({
     required String orderId,
     required String customerUpiId,
@@ -64,11 +67,8 @@ class RefundService {
         'refund.status': RefundStatus.processing.name,
       });
 
-      // In production: call payment gateway refund API
-      // Example with Razorpay:
-      // await razorpay.refund(paymentId: originalPaymentId, amount: amount * 100);
-      //
-      // For UPI refunds without a payment gateway, create a payout:
+      // A gateway would be called here to reverse the original payment, or a
+      // payout API to send the money back:
       // await payoutService.sendToUpi(upiId: customerUpiId, amount: amount);
 
       _logger.i('Refund: Processing ₹$amount to UPI $customerUpiId');

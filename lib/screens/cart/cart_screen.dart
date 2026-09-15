@@ -52,7 +52,10 @@ class CartScreen extends ConsumerWidget {
         actions: [
           TextButton(
             onPressed: () => cartNotifier.clearCart(),
-            child: const Text('Clear', style: TextStyle(color: AppColors.error)),
+            child: const Text(
+              'Clear',
+              style: TextStyle(color: AppColors.error),
+            ),
           ),
         ],
       ),
@@ -103,7 +106,10 @@ class CartScreen extends ConsumerWidget {
                           color: AppColors.inputFill,
                           borderRadius: BorderRadius.circular(8),
                         ),
-                        child: const Icon(Icons.image, color: AppColors.textHint),
+                        child: const Icon(
+                          Icons.image,
+                          color: AppColors.textHint,
+                        ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -112,7 +118,9 @@ class CartScreen extends ConsumerWidget {
                           children: [
                             Text(
                               item.product.name,
-                              style: const TextStyle(fontWeight: FontWeight.w500),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w500,
+                              ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -154,10 +162,14 @@ class CartScreen extends ConsumerWidget {
                                   ),
                                 ),
                                 Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                  ),
                                   child: Text(
                                     '${item.quantity}',
-                                    style: const TextStyle(fontWeight: FontWeight.w600),
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                    ),
                                   ),
                                 ),
                                 InkWell(
@@ -193,7 +205,10 @@ class CartScreen extends ConsumerWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('Subtotal', style: TextStyle(color: AppColors.textSecondary)),
+                      Text(
+                        'Subtotal',
+                        style: TextStyle(color: AppColors.textSecondary),
+                      ),
                       Text('₹${cartState.subtotal.toStringAsFixed(0)}'),
                     ],
                   ),
@@ -201,9 +216,15 @@ class CartScreen extends ConsumerWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('Delivery Fee', style: TextStyle(color: AppColors.textSecondary)),
+                      Text(
+                        'Delivery Fee',
+                        style: TextStyle(color: AppColors.textSecondary),
+                      ),
                       deliveryFee == 0
-                          ? const Text('FREE', style: TextStyle(color: AppColors.success))
+                          ? const Text(
+                              'FREE',
+                              style: TextStyle(color: AppColors.success),
+                            )
                           : Text('₹${deliveryFee.toStringAsFixed(0)}'),
                     ],
                   ),
@@ -220,7 +241,10 @@ class CartScreen extends ConsumerWidget {
                     children: [
                       const Text(
                         'Total',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
                       ),
                       Text(
                         '₹${total.toStringAsFixed(0)}',

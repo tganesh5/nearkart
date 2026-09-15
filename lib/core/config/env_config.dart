@@ -13,15 +13,20 @@ class EnvConfig {
   static bool get isStaging => _environment == Environment.staging;
   static bool get isProd => _environment == Environment.prod;
 
-  static String get razorpayKey {
-    switch (_environment) {
-      case Environment.dev:
-        return const String.fromEnvironment('RAZORPAY_KEY_DEV', defaultValue: '');
-      case Environment.staging:
-        return const String.fromEnvironment('RAZORPAY_KEY_STAGING', defaultValue: '');
-      case Environment.prod:
-        return const String.fromEnvironment('RAZORPAY_KEY_PROD', defaultValue: '');
-    }
+  /// Web OAuth client ID used as Google Sign-In's `serverClientId`.
+  ///
+  /// This is the public `client_type: 3` identifier already published in
+  /// `android/app/google-services.json`. It is not a secret: Android apps
+  /// prove themselves with package name + signing certificate, not this
+  /// string. A `--dart-define=GOOGLE_SERVER_CLIENT_ID=...` still wins so a
+  /// different Firebase project can override it without a code change.
+  static const _firebaseWebClientId =
+      '861604428943-748kib25dslqbo91ievg9meiviraubhb.apps.googleusercontent.com';
+
+  static String get googleServerClientId {
+    const fromEnv = String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID');
+    final trimmed = fromEnv.trim();
+    return trimmed.isEmpty ? _firebaseWebClientId : trimmed;
   }
 
   static String get apiBaseUrl {

@@ -1,0 +1,17 @@
+{
+  "name": "nearkart-tools",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Local maintenance scripts for the NearKart Firebase project.",
+  "scripts": {
+    "seed:delivery": "node seed_test_delivery.mjs",
+    "users": "node list_users.mjs --markdown",
+    "test:rules": "cd .. && firebase emulators:exec --only firestore --project nearkart-rules-test 'node tool/rules_test.mjs'"
+  },
+  "dependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
+    "firebase": "^12.19.0",
+    "firebase-admin": "^13.0.2"
+  }
+}

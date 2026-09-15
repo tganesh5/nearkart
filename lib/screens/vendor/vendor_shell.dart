@@ -4,6 +4,7 @@ import 'vendor_dashboard.dart';
 import 'vendor_products_screen.dart';
 import 'vendor_orders_screen.dart';
 import 'vendor_profile_screen.dart';
+import 'delivery_settings_screen.dart';
 
 class VendorShell extends StatefulWidget {
   const VendorShell({super.key});
@@ -13,22 +14,38 @@ class VendorShell extends StatefulWidget {
 }
 
 class _VendorShellState extends State<VendorShell> {
+  static const _productsTab = 1;
+  static const _ordersTab = 2;
+
   int _currentIndex = 0;
 
-  final _screens = const [
-    VendorDashboard(),
-    VendorProductsScreen(),
-    VendorOrdersScreen(),
-    VendorProfileScreen(),
-  ];
+  void _goToTab(int index) => setState(() => _currentIndex = index);
+
+  Widget _screenFor(int index) {
+    switch (index) {
+      case 1:
+        return const VendorProductsScreen();
+      case 2:
+        return const VendorOrdersScreen();
+      case 3:
+        return const DeliverySettingsScreen();
+      case 4:
+        return const VendorProfileScreen();
+      default:
+        return VendorDashboard(
+          onOpenProducts: () => _goToTab(_productsTab),
+          onOpenOrders: () => _goToTab(_ordersTab),
+        );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _screens[_currentIndex],
+      body: _screenFor(_currentIndex),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
-        onDestinationSelected: (index) => setState(() => _currentIndex = index),
+        onDestinationSelected: _goToTab,
         backgroundColor: Colors.white,
         indicatorColor: AppColors.primaryLight,
         destinations: const [
@@ -46,6 +63,11 @@ class _VendorShellState extends State<VendorShell> {
             icon: Icon(Icons.receipt_long_outlined),
             selectedIcon: Icon(Icons.receipt_long, color: AppColors.primary),
             label: 'Orders',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.delivery_dining_outlined),
+            selectedIcon: Icon(Icons.delivery_dining, color: AppColors.primary),
+            label: 'Delivery',
           ),
           NavigationDestination(
             icon: Icon(Icons.store_outlined),

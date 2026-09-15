@@ -1,6 +1,7 @@
 {
   "project_info": {
     "project_number": "861604428943",
+    "firebase_url": "https://nearkart007-app-default-rtdb.asia-southeast1.firebasedatabase.app",
     "project_id": "nearkart007-app",
     "storage_bucket": "nearkart007-app.firebasestorage.app"
   },
@@ -12,7 +13,20 @@
           "package_name": "com.nearkart.nearkart"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "861604428943-ps1kus6710vgd6qk0oplgp6pochiuusp.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.nearkart.nearkart",
+            "certificate_hash": "d056bc4c1ea598046b0ad86feb374308e47d40e7"
+          }
+        },
+        {
+          "client_id": "861604428943-748kib25dslqbo91ievg9meiviraubhb.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyB2NPoK0hBl6mAzGGMZgUdDHkRkRb2-Q4s"
@@ -20,7 +34,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "861604428943-748kib25dslqbo91ievg9meiviraubhb.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "861604428943-mdqqkdvkn5uhuu8qe6kao4ffr5rni2ri.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.nearkart.nearkart"
+              }
+            }
+          ]
         }
       }
     }

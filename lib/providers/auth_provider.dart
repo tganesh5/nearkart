@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../core/utils/phone_auth.dart';
 import '../models/user_model.dart';
 
 class AuthState {
@@ -42,35 +43,18 @@ class AuthNotifier extends StateNotifier<AuthState> {
     if (firebaseUser == null) return;
 
     try {
-      final doc =
-          await _firestore.collection('users').doc(firebaseUser.uid).get();
-
-      if (doc.exists) {
-        final data = doc.data()!;
-        state = AuthState(
-          user: UserModel(
-            id: firebaseUser.uid,
-            name: data['name'] ?? firebaseUser.displayName ?? '',
-            phone: data['phone'] ?? '',
-            email: firebaseUser.email ?? '',
-            role: data['role'] == 'vendor' ? UserRole.vendor : UserRole.customer,
-            createdAt: (data['createdAt'] as Timestamp?)?.toDate() ??
-                DateTime.now(),
-          ),
-          isAuthenticated: true,
-        );
-      }
+      await _completeSession(firebaseUser);
     } catch (_) {
-      // Firestore fetch failed; user stays logged out
+      // Profile fetch failed; splash will send them to login.
     }
   }
 
-  Future<bool> login(String email, String password, UserRole role) async {
+  Future<bool> login(String email, String password) async {
     state = state.copyWith(isLoading: true, error: null);
 
     try {
       final credential = await _auth.signInWithEmailAndPassword(
-        email: email.trim(),
+        email: authEmailFromIdentifier(email),
         password: password,
       );
 
@@ -83,27 +67,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
         return false;
       }
 
-      final doc =
-          await _firestore.collection('users').doc(firebaseUser.uid).get();
-      final data = doc.data();
-
-      state = AuthState(
-        user: UserModel(
-          id: firebaseUser.uid,
-          name: data?['name'] ?? firebaseUser.displayName ?? '',
-          phone: data?['phone'] ?? '',
-          email: firebaseUser.email ?? email,
-          role: data?['role'] == 'vendor' ? UserRole.vendor : UserRole.customer,
-          createdAt: (data?['createdAt'] as Timestamp?)?.toDate() ??
-              DateTime.now(),
-        ),
-        isAuthenticated: true,
-      );
+      // Auth already succeeded. A Firestore blip must not bounce the user
+      // back to the login form as if the password were wrong.
+      await _completeSession(firebaseUser, fallbackEmail: email);
       return true;
     } on FirebaseAuthException catch (e) {
       state = state.copyWith(
         isLoading: false,
-        error: _mapAuthError(e.code),
+        error: messageForAuthCode(e.code),
       );
       return false;
     } catch (e) {
@@ -115,36 +86,12 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
-  Future<bool> loginWithFirebaseUser(User firebaseUser, UserRole role) async {
+  Future<bool> loginWithFirebaseUser(User firebaseUser) async {
     state = state.copyWith(isLoading: true, error: null);
 
     try {
-      final docRef = _firestore.collection('users').doc(firebaseUser.uid);
-      final doc = await docRef.get();
-
-      if (!doc.exists) {
-        await docRef.set({
-          'name': firebaseUser.displayName ?? '',
-          'email': firebaseUser.email ?? '',
-          'phone': firebaseUser.phoneNumber ?? '',
-          'role': role.name,
-          'createdAt': FieldValue.serverTimestamp(),
-        });
-      }
-
-      final data = doc.exists ? doc.data() : null;
-
-      state = AuthState(
-        user: UserModel(
-          id: firebaseUser.uid,
-          name: data?['name'] ?? firebaseUser.displayName ?? '',
-          phone: data?['phone'] ?? firebaseUser.phoneNumber ?? '',
-          email: firebaseUser.email ?? '',
-          role: data?['role'] == 'vendor' ? UserRole.vendor : UserRole.customer,
-          createdAt: DateTime.now(),
-        ),
-        isAuthenticated: true,
-      );
+      await _ensureProfile(firebaseUser);
+      await _completeSession(firebaseUser);
       return true;
     } catch (e) {
       state = state.copyWith(
@@ -155,35 +102,118 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
-  Future<bool> signUpVendor({
-    required String name,
-    required String phone,
-    required String email,
-    required String password,
-    required String upiId,
+  /// Writes a customer profile the first time a Google account signs in.
+  /// Failures are ignored here so a network blip cannot undo Auth.
+  Future<void> _ensureProfile(User firebaseUser) async {
+    try {
+      final docRef = _firestore.collection('users').doc(firebaseUser.uid);
+      final doc = await docRef.get();
+      if (doc.exists) return;
+      await docRef.set({
+        'name': firebaseUser.displayName ?? '',
+        'email': displayEmail(firebaseUser.email),
+        'phone': firebaseUser.phoneNumber ?? '',
+        'role': UserRole.customer.name,
+        'status': AccountStatus.active.name,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {
+      // Profile is created again from PhoneCapture or the next successful
+      // session once Firestore is reachable.
+    }
+  }
+
+  Future<void> _completeSession(
+    User firebaseUser, {
+    String? fallbackEmail,
   }) async {
-    return _signUp(
-      name: name,
-      phone: phone,
-      email: email,
-      password: password,
-      role: UserRole.vendor,
-      upiId: upiId,
+    Map<String, dynamic>? data;
+    try {
+      data = (await _firestore.collection('users').doc(firebaseUser.uid).get())
+          .data();
+    } catch (_) {
+      data = null;
+    }
+
+    state = AuthState(
+      user: UserModel(
+        id: firebaseUser.uid,
+        name: data?['name'] ?? firebaseUser.displayName ?? '',
+        phone: data?['phone'] ?? firebaseUser.phoneNumber ?? '',
+        email: _visibleEmail(
+          data?['email']?.toString(),
+          firebaseUser.email,
+          fallbackEmail,
+        ),
+        role: UserRole.fromStoredValue(data?['role']),
+        status: AccountStatus.fromStoredValue(data?['status']),
+        createdAt:
+            (data?['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      ),
+      isAuthenticated: true,
     );
   }
 
-  Future<bool> signUpCustomer({
+  /// Records a mobile number for the signed-in account. Needed because Google
+  /// sign-in never supplies one, and orders are unusable without a contact
+  /// number for every party.
+  Future<bool> updatePhone(String phone) async {
+    final user = state.user;
+    final firebaseUser = _auth.currentUser;
+    if (user == null || firebaseUser == null) {
+      state = state.copyWith(error: 'Please sign in again.');
+      return false;
+    }
+
+    final digits = phone.replaceAll(RegExp(r'\D'), '');
+    if (digits.length != 10) {
+      state = state.copyWith(error: 'Enter a valid 10-digit mobile number');
+      return false;
+    }
+
+    state = state.copyWith(isLoading: true);
+    try {
+      await _firestore.collection('users').doc(firebaseUser.uid).set({
+        'phone': digits,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      state = AuthState(
+        user: user.copyWith(phone: digits),
+        isAuthenticated: true,
+      );
+      return true;
+    } on FirebaseException catch (e) {
+      state = state.copyWith(
+        isLoading: false,
+        error: e.code == 'permission-denied'
+            ? 'You do not have permission to change this number.'
+            : 'Could not save your mobile number.',
+      );
+      return false;
+    } catch (_) {
+      // Never leave the caller stuck on a disabled button and a spinner.
+      state = state.copyWith(
+        isLoading: false,
+        error: 'Could not save your mobile number. Please try again.',
+      );
+      return false;
+    }
+  }
+
+  Future<bool> signUp({
     required String name,
     required String phone,
     required String email,
     required String password,
+    required UserRole role,
   }) async {
     return _signUp(
       name: name,
       phone: phone,
       email: email,
       password: password,
-      role: UserRole.customer,
+      role: role,
     );
   }
 
@@ -197,16 +227,26 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }) async {
     state = state.copyWith(isLoading: true, error: null);
 
-    final validationError =
-        _validateSignup(name, phone, email, password, upiId: upiId);
+    final validationError = _validateSignup(
+      name,
+      phone,
+      email,
+      password,
+      upiId: upiId,
+    );
     if (validationError != null) {
       state = state.copyWith(isLoading: false, error: validationError);
       return false;
     }
 
     try {
+      final visibleEmail = displayEmail(email);
+      final authEmail = visibleEmail.isEmpty
+          ? phoneAuthEmail(phone.trim())
+          : visibleEmail;
+
       final credential = await _auth.createUserWithEmailAndPassword(
-        email: email.trim(),
+        email: authEmail,
         password: password,
       );
 
@@ -220,12 +260,16 @@ class AuthNotifier extends StateNotifier<AuthState> {
       }
 
       await firebaseUser.updateDisplayName(name.trim());
+      final accountStatus = role == UserRole.customer
+          ? AccountStatus.active
+          : AccountStatus.pending;
 
       final userData = {
         'name': name.trim(),
         'phone': phone.trim(),
-        'email': email.trim(),
+        'email': visibleEmail,
         'role': role.name,
+        'status': accountStatus.name,
         'createdAt': FieldValue.serverTimestamp(),
       };
       if (upiId != null) userData['upiId'] = upiId.trim();
@@ -237,8 +281,9 @@ class AuthNotifier extends StateNotifier<AuthState> {
           id: firebaseUser.uid,
           name: name.trim(),
           phone: phone.trim(),
-          email: email.trim(),
+          email: visibleEmail,
           role: role,
+          status: accountStatus,
           createdAt: DateTime.now(),
         ),
         isAuthenticated: true,
@@ -247,7 +292,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     } on FirebaseAuthException catch (e) {
       state = state.copyWith(
         isLoading: false,
-        error: _mapAuthError(e.code),
+        error: messageForAuthCode(e.code),
       );
       return false;
     } catch (e) {
@@ -277,10 +322,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
     if (phone.length != 10 || !RegExp(r'^\d{10}$').hasMatch(phone)) {
       return 'Enter a valid 10-digit mobile number';
     }
-    if (!RegExp(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
-        .hasMatch(email)) {
-      return 'Enter a valid email address';
-    }
+    final emailError = optionalEmail(email);
+    if (emailError != null) return emailError;
     if (password.length < 6) return 'Password must be at least 6 characters';
     if (upiId != null && !upiId.contains('@')) {
       return 'Enter a valid UPI ID (e.g., name@bank)';
@@ -288,7 +331,30 @@ class AuthNotifier extends StateNotifier<AuthState> {
     return null;
   }
 
-  String _mapAuthError(String code) {
+  String _visibleEmail(String? stored, String? authEmail, String? fallback) {
+    for (final candidate in [stored, authEmail, fallback]) {
+      final visible = displayEmail(candidate);
+      if (visible.isNotEmpty) return visible;
+    }
+    return '';
+  }
+
+  Future<bool> sendPasswordReset(String email) async {
+    try {
+      await _auth.sendPasswordResetEmail(email: email.trim());
+      return true;
+    } on FirebaseAuthException catch (e) {
+      state = state.copyWith(error: messageForAuthCode(e.code));
+      return false;
+    } catch (_) {
+      state = state.copyWith(
+        error: 'Could not send the reset email. Check your connection.',
+      );
+      return false;
+    }
+  }
+
+  String messageForAuthCode(String code) {
     switch (code) {
       case 'user-not-found':
       case 'wrong-password':
@@ -304,6 +370,9 @@ class AuthNotifier extends StateNotifier<AuthState> {
         return 'Too many attempts. Please try again later';
       case 'user-disabled':
         return 'This account has been disabled';
+      case 'network-request-failed':
+        return 'Cannot reach NearKart. Check your internet connection '
+            'and try again.';
       default:
         return 'Authentication failed. Please try again.';
     }
