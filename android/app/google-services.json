@@ -15,6 +15,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "861604428943-gheo5dlg8ndifjgh0o0gn0en0b7n1lrd.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.nearkart.nearkart",
+            "certificate_hash": "b19e72905888f71a671982fda45f8a4181a0f97d"
+          }
+        },
+        {
           "client_id": "861604428943-ps1kus6710vgd6qk0oplgp6pochiuusp.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {

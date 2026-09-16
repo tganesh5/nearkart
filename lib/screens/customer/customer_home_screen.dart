@@ -5,8 +5,13 @@ import '../../core/theme/app_colors.dart';
 import '../../core/constants/app_constants.dart';
 import '../../models/store_model.dart';
 import '../../providers/catalog_provider.dart';
+import '../../providers/service_providers.dart';
+import '../common/location_picker_screen.dart';
 import 'customer_search_screen.dart';
 import 'store_detail_screen.dart';
+
+// Provider to hold user explicitly selected or custom typed location
+final userSelectedLocationProvider = StateProvider<String?>((ref) => null);
 
 class CustomerHomeScreen extends ConsumerWidget {
   final VoidCallback? onSeeAllStores;
@@ -18,6 +23,16 @@ class CustomerHomeScreen extends ConsumerWidget {
     final storesAsync = ref.watch(storesProvider);
     final stores = storesAsync.value ?? const <StoreModel>[];
 
+    final locationAsync = ref.watch(currentLocationProvider);
+    final customLocation = ref.watch(userSelectedLocationProvider);
+
+    String displayLocation = 'Koramangala, Bangalore';
+    if (customLocation != null) {
+      displayLocation = customLocation;
+    } else if (locationAsync.value?.address != null) {
+      displayLocation = locationAsync.value!.address!;
+    }
+
     return Scaffold(
       body: CustomScrollView(
         slivers: [
@@ -28,7 +43,21 @@ class CustomerHomeScreen extends ConsumerWidget {
             title: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
+                InkWell(
+                  onTap: () async {
+                    final picked = await Navigator.of(context).push<PickedLocation>(
+                      MaterialPageRoute(
+                        builder: (_) => const LocationPickerScreen(
+                          title: 'Select delivery location',
+                    ),
+                  ),
+                );
+                if (picked != null && picked.address != null) {
+                  ref.read(userSelectedLocationProvider.notifier).state = picked.address;
+                }
+              },
+              child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     const Icon(
                       Icons.location_on,
@@ -36,15 +65,19 @@ class CustomerHomeScreen extends ConsumerWidget {
                       color: AppColors.primary,
                     ),
                     const SizedBox(width: 4),
-                    Text(
-                      'Koramangala, Bangalore',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: AppColors.textPrimary,
+                    Flexible(
+                      child: Text(
+                        displayLocation,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: AppColors.textPrimary,
+                        ),
                       ),
                     ),
                     const Icon(Icons.keyboard_arrow_down, size: 18),
                   ],
+                ),
                 ),
               ],
             ),

@@ -36,6 +36,17 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
   final _paymentService = PaymentService();
 
   @override
+  void initState() {
+    super.initState();
+    // Automatically trigger location fetch on screen landing
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _useCurrentLocation();
+      }
+    });
+  }
+
+  @override
   void dispose() {
     _addressController.dispose();
     _notesController.dispose();
@@ -124,17 +135,17 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                 children: [
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: _isProcessing ? null : _chooseOnMap,
-                      icon: const Icon(Icons.map_outlined),
-                      label: const Text('Choose on map'),
+                      onPressed: _isProcessing ? null : _useCurrentLocation,
+                      icon: const Icon(Icons.my_location),
+                      label: const Text('Use my location'),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: _isProcessing ? null : _useCurrentLocation,
-                      icon: const Icon(Icons.my_location),
-                      label: const Text('Use my location'),
+                      onPressed: _isProcessing ? null : _chooseOnMap,
+                      icon: const Icon(Icons.map_outlined),
+                      label: const Text('Choose on map'),
                     ),
                   ),
                 ],

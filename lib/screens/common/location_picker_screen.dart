@@ -197,8 +197,8 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
   /// Recentres the map and adopts the address that came with the point.
   void _moveTo(LocationData location) {
     final point = LatLng(location.latitude, location.longitude);
-    _mapController.move(point, _zoom);
     _center.value = point;
+    _mapController.move(point, _zoom);
     _geocodeDebounce?.cancel();
     _geocodeRequest++;
     _address.value = _Address(
