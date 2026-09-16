@@ -1,5 +1,7 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -329,30 +331,31 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
       if (_paymentMethod == 'upi') {
         if (vendorUpiId.isEmpty) {
           _showError('UPI is not configured for this store.');
-        } else if (kIsWeb) {
-          setState(() => _isProcessing = false);
-          if (mounted) {
-            _showUpiQrCode(
-              vendorUpiId: vendorUpiId,
-              vendorName: vendorName,
-              amount: orderAmount,
-              orderId: orderId,
-              total: total,
-              onPaymentComplete: saveOrder,
-            );
-          }
-        } else {
-          await _paymentService.payVendorViaUpi(
+          return;
+        }
+        if (!mounted) return;
+        setState(() => _isProcessing = false);
+        _showUpiPaymentSheet(
+          vendorUpiId: vendorUpiId,
+          vendorName: vendorName,
+          amount: orderAmount,
+          orderId: orderId,
+          total: total,
+          onPaymentComplete: saveOrder,
+        );
+        unawaited(
+          _paymentService.openUpiApp(
             vendorUpiId: vendorUpiId,
             vendorName: vendorName,
             orderAmount: orderAmount,
             orderId: orderId,
-          );
-          if (await saveOrder() && mounted) _showOrderSuccess(total);
-        }
+          ),
+        );
       } else {
         if (await saveOrder() && mounted) _showOrderSuccess(total);
       }
+    } on AppException catch (error) {
+      _showError(error.message);
     } catch (_) {
       _showError('Unable to place the order. Please try again.');
     } finally {
@@ -510,7 +513,7 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
     );
   }
 
-  void _showUpiQrCode({
+  void _showUpiPaymentSheet({
     required String vendorUpiId,
     required String vendorName,
     required double amount,
@@ -518,114 +521,212 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
     required double total,
     required Future<bool> Function() onPaymentComplete,
   }) {
-    final upiString =
-        'upi://pay?pa=$vendorUpiId&pn=${Uri.encodeComponent(vendorName)}&am=${amount.toStringAsFixed(2)}&cu=INR&tr=$orderId&tn=${Uri.encodeComponent("Order #$orderId via NearKart")}';
+    final upiString = PaymentService.buildUpiUrl(
+      upiId: vendorUpiId,
+      name: vendorName,
+      amount: amount,
+      transactionRef: orderId,
+      note: 'Order #$orderId via NearKart',
+    );
 
-    showDialog(
+    showModalBottomSheet<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text(
-          'Scan & Pay',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-        content: SizedBox(
-          width: 320,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'Scan this QR code with any UPI app\n(GPay, PhonePe, Paytm)',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
-              ),
-              const SizedBox(height: 20),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.primary, width: 2),
-                ),
-                child: QrImageView(
-                  data: upiString,
-                  version: QrVersions.auto,
-                  size: 220,
-                  gapless: true,
-                  embeddedImage: null,
-                  errorStateBuilder: (ctx, err) =>
-                      const Center(child: Text('Error generating QR')),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: AppColors.inputFill,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Column(
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text('Pay to:', style: TextStyle(fontSize: 12)),
-                        Text(
-                          vendorName,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text('UPI ID:', style: TextStyle(fontSize: 12)),
-                        Text(
-                          vendorUpiId,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text('Amount:', style: TextStyle(fontSize: 12)),
-                        Text(
-                          '₹${amount.toStringAsFixed(2)}',
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.primary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 20),
-              _PaymentStatusChecker(
-                onComplete: () async {
-                  Navigator.of(ctx).pop();
-                  if (await onPaymentComplete() && mounted) {
-                    _showOrderSuccess(total);
-                  }
-                },
-                onCancel: () => Navigator.of(ctx).pop(),
-              ),
-            ],
-          ),
-        ),
+      isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: AppColors.divider,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Pay with UPI',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Open your UPI app, or scan this QR if no app is installed.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppColors.primary, width: 2),
+                    ),
+                    child: QrImageView(
+                      data: upiString,
+                      version: QrVersions.auto,
+                      size: 180,
+                      gapless: true,
+                      errorStateBuilder: (context, err) =>
+                          const Center(child: Text('Error generating QR')),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.inputFill,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'Pay to:',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                            Flexible(
+                              child: Text(
+                                vendorName,
+                                textAlign: TextAlign.end,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            const Text(
+                              'UPI ID:',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                            const Spacer(),
+                            Flexible(
+                              child: Text(
+                                vendorUpiId,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Copy UPI ID',
+                              visualDensity: VisualDensity.compact,
+                              icon: const Icon(Icons.copy, size: 16),
+                              onPressed: () async {
+                                await Clipboard.setData(
+                                  ClipboardData(text: vendorUpiId),
+                                );
+                                if (!ctx.mounted) return;
+                                ScaffoldMessenger.of(ctx).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('UPI ID copied.'),
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'Amount:',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                            Text(
+                              '₹${amount.toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.primary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: FilledButton.icon(
+                      onPressed: () async {
+                        final opened = await _paymentService.openUpiApp(
+                          vendorUpiId: vendorUpiId,
+                          vendorName: vendorName,
+                          orderAmount: amount,
+                          orderId: orderId,
+                        );
+                        if (opened || !ctx.mounted) return;
+                        ScaffoldMessenger.of(ctx).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'No UPI app on this device. Scan the QR or copy the UPI ID.',
+                            ),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.account_balance_wallet_outlined),
+                      label: const Text('Open UPI app'),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.success,
+                      ),
+                      onPressed: () async {
+                        Navigator.of(ctx).pop();
+                        if (await onPaymentComplete() && mounted) {
+                          _showOrderSuccess(total);
+                        } else if (mounted) {
+                          _showError(
+                            'Unable to place the order. Please try again.',
+                          );
+                        }
+                      },
+                      child: const Text("I've paid"),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    child: const Text(
+                      'Cancel',
+                      style: TextStyle(color: AppColors.error),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -800,102 +901,6 @@ class _PaymentOption extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _PaymentStatusChecker extends StatefulWidget {
-  final VoidCallback onComplete;
-  final VoidCallback onCancel;
-
-  const _PaymentStatusChecker({
-    required this.onComplete,
-    required this.onCancel,
-  });
-
-  @override
-  State<_PaymentStatusChecker> createState() => _PaymentStatusCheckerState();
-}
-
-class _PaymentStatusCheckerState extends State<_PaymentStatusChecker> {
-  int _secondsRemaining = 120;
-  bool _isChecking = true;
-  late final _ticker = Stream.periodic(const Duration(seconds: 1));
-
-  @override
-  void initState() {
-    super.initState();
-    _startPolling();
-  }
-
-  void _startPolling() {
-    _ticker.take(_secondsRemaining).listen((_) {
-      if (!mounted) return;
-      setState(() => _secondsRemaining--);
-
-      // In production: poll backend API for payment confirmation
-      // For now: auto-complete after 30 seconds (simulating payment detection)
-      if (_secondsRemaining <= 90) {
-        // After 30 seconds, mark as paid (in production this would be a webhook/API call)
-        setState(() => _isChecking = false);
-        Future.delayed(const Duration(seconds: 1), () {
-          if (mounted) widget.onComplete();
-        });
-      }
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (!_isChecking) {
-      return Column(
-        children: [
-          const Icon(Icons.check_circle, color: AppColors.success, size: 32),
-          const SizedBox(height: 8),
-          const Text(
-            'Payment Received!',
-            style: TextStyle(
-              color: AppColors.success,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      );
-    }
-
-    return Column(
-      children: [
-        const SizedBox(
-          width: 24,
-          height: 24,
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-            color: AppColors.primary,
-          ),
-        ),
-        const SizedBox(height: 12),
-        Text(
-          'Waiting for payment...',
-          style: TextStyle(
-            fontWeight: FontWeight.w500,
-            color: AppColors.textPrimary,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'Scan the QR code above & pay\nAuto-detecting in ${_secondsRemaining}s',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 12, color: AppColors.textHint),
-        ),
-        const SizedBox(height: 16),
-        TextButton(
-          onPressed: widget.onCancel,
-          child: const Text(
-            'Cancel Payment',
-            style: TextStyle(color: AppColors.error),
-          ),
-        ),
-      ],
     );
   }
 }
