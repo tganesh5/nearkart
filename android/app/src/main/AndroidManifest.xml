@@ -68,7 +68,12 @@
             <action android:name="android.intent.action.VIEW"/>
             <data android:scheme="google.navigation"/>
         </intent>
-        <!-- UPI apps, for paying the store. -->
+        <!-- UPI apps, for paying the store. Host is required on Android 11+
+             or PackageManager cannot see GPay / PhonePe / Paytm. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="upi" android:host="pay"/>
+        </intent>
         <intent>
             <action android:name="android.intent.action.VIEW"/>
             <data android:scheme="upi"/>
